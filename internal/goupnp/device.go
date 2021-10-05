@@ -56,19 +56,13 @@ func DeviceByURL(ctx context.Context, url string) (RootDevice, error) {
 	return root, nil
 }
 
-func SSDP(ctx context.Context) (locs []string, err error) {
+func SSDP() (<-chan string, error) {
 	const maxWait = 2 * time.Second
-	ctx, cancel := context.WithTimeout(ctx, maxWait+100*time.Millisecond)
-	defer cancel()
 	conn, err := net.ListenPacket("udp", ":0")
 	if err != nil {
 		return nil, err
 	}
-	go func() {
-		<-ctx.Done()
-		conn.Close()
-	}()
-
+	conn.SetDeadline(time.Now().Add(maxWait + 100*time.Millisecond))
 	ssdpUDP4Addr := &net.UDPAddr{IP: net.ParseIP("239.255.255.250"), Port: 1900}
 	reqPacket := []byte(strings.Replace(fmt.Sprintf(`
 M-SEARCH * HTTP/1.1
@@ -87,6 +81,15 @@ ST: upnp:rootdevice
 		time.Sleep(sendInterval)
 	}
 
+	locs := make(chan string)
+	go doSSDP(conn, locs)
+	return locs, nil
+}
+
+func doSSDP(conn net.PacketConn, locs chan<- string) {
+	defer conn.Close()
+	defer close(locs)
+
 	seen := make(map[string]bool)
 	respPacket := make([]byte, 2048)
 	r := bytes.NewReader(respPacket)
@@ -94,11 +97,11 @@ ST: upnp:rootdevice
 	for {
 		n, _, err := conn.ReadFrom(respPacket)
 		if err != nil {
-			if err, ok := err.(net.Error); ok && err.Temporary() {
+			if err, ok := err.(net.Error); ok && err.Temporary() && !err.Timeout() {
 				time.Sleep(5 * time.Millisecond)
 				continue
 			}
-			return locs, nil
+			return
 		}
 		r.Reset(respPacket[:n])
 		br.Reset(r)
@@ -116,7 +119,7 @@ ST: upnp:rootdevice
 		}
 		if !seen[usn] {
 			seen[usn] = true
-			locs = append(locs, location.String())
+			locs <- location.String()
 		}
 	}
 }

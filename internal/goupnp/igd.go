@@ -74,19 +74,6 @@ func (igd IGDClient) ServiceType() string {
 	return igd.srv.ServiceType
 }
 
-func DiscoverIGDClients(ctx context.Context) ([]IGDClient, error) {
-	locations, err := SSDP(ctx)
-	if err != nil {
-		return nil, err
-	}
-	var clients []IGDClient
-	for _, url := range locations {
-		cs, _ := IGDClientsByURL(ctx, url)
-		clients = append(clients, cs...)
-	}
-	return clients, nil
-}
-
 func IGDClientsByURL(ctx context.Context, url string) ([]IGDClient, error) {
 	rd, err := DeviceByURL(ctx, url)
 	if err != nil {

@@ -4,11 +4,13 @@ package upnp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
-	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"lukechampine.com/upnp/internal/goupnp"
 )
@@ -100,27 +102,60 @@ func getInternalIP(loc string) (string, error) {
 	return "", fmt.Errorf("could not find local address in same net as %v", devAddr)
 }
 
-// Discover scans the local network for Devices.
-func Discover(ctx context.Context) ([]Device, error) {
-	clients, err := goupnp.DiscoverIGDClients(ctx)
+// DiscoverAll scans the local network for Devices.
+func DiscoverAll() (<-chan Device, error) {
+	locations, err := goupnp.SSDP()
 	if err != nil {
 		return nil, err
 	}
-	var devices []Device
-	for _, c := range clients {
-		if ip, err := getInternalIP(c.Location()); err == nil {
-			devices = append(devices, Device{ip, c})
-		}
+	ch := make(chan Device)
+	go doDiscoverAll(locations, ch)
+	return ch, nil
+}
+
+func doDiscoverAll(locations <-chan string, devices chan<- Device) {
+	var wg sync.WaitGroup
+	for url := range locations {
+		wg.Add(1)
+		go func(url string) {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			cs, _ := goupnp.IGDClientsByURL(ctx, url)
+			for _, c := range cs {
+				if ip, err := getInternalIP(c.Location()); err == nil {
+					devices <- Device{ip, c}
+				}
+			}
+		}(url)
 	}
-	// prefer WANIP to WANPPP
-	sort.Slice(devices, func(i, j int) bool {
-		si, sj := devices[i].client.ServiceType(), devices[j].client.ServiceType()
-		if strings.Contains(si, "WANIP") == strings.Contains(sj, "WANIP") {
-			return si < sj
+	wg.Wait()
+	close(devices)
+}
+
+// Discover scans the local network for Devices, reurning the first Device
+// found.
+func Discover(ctx context.Context) (Device, error) {
+	devices, err := DiscoverAll()
+	if err != nil {
+		return Device{}, err
+	}
+	// ensure we fully consume channel
+	defer func() {
+		go func() {
+			for range devices {
+			}
+		}()
+	}()
+	select {
+	case d, ok := <-devices:
+		if !ok {
+			return Device{}, errors.New("no UPnP-enabled gateway found")
 		}
-		return strings.Contains(si, "WANIP")
-	})
-	return devices, nil
+		return d, nil
+	case <-ctx.Done():
+		return Device{}, ctx.Err()
+	}
 }
 
 // Connect connects to the router service specified by deviceURL. Generally,

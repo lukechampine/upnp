@@ -10,14 +10,16 @@ go get github.com/lukechampine/upnp
 
 Yep, it's another package for forwarding ports and discovering your external IP
 address. This one has no dependencies and is ~1 MB smaller than
-[huin/goupnp](https://github.com/huin/goupnp).
+[huin/goupnp](https://github.com/huin/goupnp). It also offers a more flexible
+device scanning API: devices are returned via channel as soon as they respond
+(typically a few milliseconds) rather than all devices being returned after a
+timeout of 2 seconds (as in huin/goupnp).
 
 ## Usage
 
 ```go
-// scan for router(s)
-devices, _ := upnp.Discover(context.Background())
-d := devices[0]
+// scan for router
+d, _ := upnp.Discover(context.Background())
 
 // connect to a previously-scanned router
 routerURL := d.Location()
