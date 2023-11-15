@@ -2,7 +2,6 @@ package goupnp
 
 import (
 	"encoding/xml"
-	"errors"
 	"fmt"
 	"io/ioutil"
 	"net/http"
@@ -39,7 +38,12 @@ type respEnvelope struct {
 		Fault *struct {
 			FaultCode   string `xml:"faultcode"`
 			FaultString string `xml:"faultstring"`
-			Detail      string `xml:"detail"`
+			Detail      *struct {
+				UPnPError *struct {
+					Code        string `xml:"errorCode"`
+					Description string `xml:"errorDescription"`
+				} `xml:"UPnPError"`
+			} `xml:"detail"`
 		} `xml:"Fault"`
 		RawAction []byte `xml:",innerxml"`
 	} `xml:"http://schemas.xmlsoap.org/soap/envelope/ Body"`
@@ -70,17 +74,18 @@ func performSOAPAction(url string, actionNamespace, actionName string, req inter
 		return err
 	}
 	defer response.Body.Close()
-	if response.StatusCode != 200 {
-		resp, _ := ioutil.ReadAll(response.Body)
-		return errors.New(string(resp))
-	}
+	defer ioutil.ReadAll(response.Body)
 
 	var responseEnv respEnvelope
 	decoder := xml.NewDecoder(response.Body)
 	if err := decoder.Decode(&responseEnv); err != nil {
 		return fmt.Errorf("invalid response body: %w", err)
-	} else if responseEnv.Body.Fault != nil {
-		return fmt.Errorf("SOAP fault: %s", responseEnv.Body.Fault.FaultString)
+	} else if f := responseEnv.Body.Fault; f != nil {
+		if f.Detail == nil || f.Detail.UPnPError == nil {
+			return fmt.Errorf("SOAP fault: %s", responseEnv.Body.Fault.FaultString)
+		}
+		e := f.Detail.UPnPError
+		return fmt.Errorf("UPnP error: %s (error code %s)", e.Description, e.Code)
 	}
 	if resp != nil {
 		if err := xml.Unmarshal(responseEnv.Body.RawAction, resp); err != nil {
